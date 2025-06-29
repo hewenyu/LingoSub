@@ -6,6 +6,9 @@ AI字幕翻译工具
 # worker
 celery -A app.worker.celery_app worker --loglevel=info --concurrency=2
 
+# windows woker 
+celery -A app.worker.celery_app worker --loglevel=info --concurrency=1
+
 
 # api 
 uvicorn app.main:app --reload --port 8001
