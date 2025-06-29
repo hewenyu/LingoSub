@@ -1,5 +1,8 @@
 from celery import Celery
 from app.core.config import settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Create a Celery instance
 celery_app = Celery(
@@ -9,7 +12,10 @@ celery_app = Celery(
     include=["app.worker.tasks"],  # List of modules to import when the worker starts
 )
 
+logger.info("Celery app initialized.")
+
 # Optional configuration
 celery_app.conf.update(
     task_track_started=True,
-) 
+)
+logger.info("Celery app configuration updated.")

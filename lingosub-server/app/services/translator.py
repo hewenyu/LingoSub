@@ -1,9 +1,12 @@
 import re
 from pathlib import Path
 from typing import List, NamedTuple, Callable, Optional
+import logging
 
 from openai import OpenAI
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 # --- Constants ---
 # A separator that is unlikely to appear in subtitle text
@@ -33,6 +36,7 @@ class SubtitleBlock(NamedTuple):
 
 def parse_srt(content: str) -> List[SubtitleBlock]:
     """Parses SRT content into a list of SubtitleBlock objects."""
+    logger.info("Parsing SRT content.")
     content = content.replace('\r\n', '\n').strip()
     blocks = []
     # A more robust regex to handle various line endings and optional trailing newlines
@@ -46,11 +50,13 @@ def parse_srt(content: str) -> List[SubtitleBlock]:
             end_time=match.group(3).replace(',', '.'),
             text=match.group(4).strip()
         ))
+    logger.info(f"Parsed {len(blocks)} subtitle blocks.")
     return blocks
 
 
 def build_srt(blocks: List[SubtitleBlock]) -> str:
     """Builds an SRT content string from a list of SubtitleBlock objects."""
+    logger.info(f"Building SRT from {len(blocks)} blocks.")
     srt_content = []
     for block in blocks:
         start_time = block.start_time.replace('.', ',')
@@ -58,7 +64,8 @@ def build_srt(blocks: List[SubtitleBlock]) -> str:
         srt_content.append(
             f"{block.index}\n{start_time} --> {end_time}\n{block.text}\n"
         )
-    return "\n".join(srt_content)
+    logger.info("SRT content built successfully.")
+    return ''.join(srt_content)
 
 
 def _translate_batch(texts: List[str], target_language: str, model: str, client: OpenAI) -> List[str]:
@@ -92,7 +99,7 @@ def _translate_batch(texts: List[str], target_language: str, model: str, client:
         return [fragment.strip() for fragment in translated_fragments]
 
     except Exception as e:
-        print(f"An error occurred during translation: {e}")
+        logger.error(f"An error occurred during translation: {e}")
         # In case of any error, return original texts as a fallback
         return texts
 
@@ -112,7 +119,7 @@ def translate_file(
             update_callback(progress)
 
     _update_progress(0.0)
-    print(f"Starting translation for {source_path.name} to {target_language} using {model}")
+    logger.info(f"Starting translation for {source_path.name} to {target_language} using {model}")
     
     client = OpenAI(api_key=settings.OPENAI_API_KEY, base_url=settings.OPENAI_BASE_URL)
 
@@ -169,7 +176,7 @@ def translate_file(
     
     result_path.write_text(translated_srt_content, encoding='utf-8')
     
-    print(f"Translation finished. Result saved to {result_path}")
+    logger.info(f"Translation finished. Result saved to {result_path}")
     _update_progress(1.0) # Final progress
     
-    return result_path 
+    return result_path

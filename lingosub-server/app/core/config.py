@@ -1,5 +1,13 @@
+import logging
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
+
+
+# 日志配置
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+)
 
 
 class Settings(BaseSettings):
@@ -21,4 +29,4 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding='utf-8')
 
 
-settings = Settings() 
+settings = Settings()
