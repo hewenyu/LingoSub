@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from typing import Optional
 
 
 class Settings(BaseSettings):
@@ -11,6 +12,10 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
     TEMP_FILE_DIR: str = "temp_files"
     RESULT_FILE_DIR: str = "result_files"
+
+    # OpenAI API settings
+    OPENAI_API_KEY: str = "your_openai_api_key_here"
+    OPENAI_BASE_URL: Optional[str] = None
 
     # 如果 .env 文件存在，则从中加载
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding='utf-8')

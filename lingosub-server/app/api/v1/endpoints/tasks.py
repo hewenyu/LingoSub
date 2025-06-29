@@ -18,8 +18,9 @@ router = APIRouter()
 
 @router.post("/tasks", response_model=TaskCreationResponse, status_code=status.HTTP_202_ACCEPTED)
 async def create_translation_task(
-    target_language: str = Form(...),
     file: UploadFile = File(...),
+    target_language: str = Form(...),
+    model: str = Form("gpt-4o-mini"),
     api_key: str = Depends(get_api_key)
 ):
     """
@@ -42,7 +43,11 @@ async def create_translation_task(
         file.file.close()
 
     # Start the Celery task
-    task = translate_srt_task.delay(source_file_path=str(file_path), target_language=target_language)
+    task = translate_srt_task.delay(
+        source_file_path=str(file_path), 
+        target_language=target_language,
+        model=model
+    )
 
     return {"task_id": task.id, "status": "PENDING"}
 

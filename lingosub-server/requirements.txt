@@ -3,4 +3,5 @@ uvicorn[standard]
 celery
 redis
 pydantic-settings
-python-multipart 
+python-multipart
+openai 
