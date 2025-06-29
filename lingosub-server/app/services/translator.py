@@ -1,11 +1,24 @@
 import re
-import asyncio
 from pathlib import Path
 from typing import List, NamedTuple
 
-from openai import AsyncOpenAI
+from openai import OpenAI
 from app.core.config import settings
 
+# --- Constants ---
+# A separator that is unlikely to appear in subtitle text
+BATCH_SEPARATOR = "|||---|||"
+
+SYSTEM_PROMPT = """You are an expert subtitle translator. Your task is to translate the given text fragments from a source language into {target_language}.
+
+- You will receive a batch of subtitle texts concatenated by a special separator '|||---|||'.
+- Translate each fragment individually.
+- Return the translated fragments, preserving the original '|||---|||' separator between each one.
+- Do NOT translate the '|||---|||' separator.
+- Ensure the translation is accurate, natural, and adheres to the context of subtitles.
+- Do not add any extra text, introductory phrases, or explanations. Only return the translated fragments joined by the separator.
+- The number of fragments you return must exactly match the number of fragments you receive.
+"""
 
 class SubtitleBlock(NamedTuple):
     index: int
@@ -16,9 +29,11 @@ class SubtitleBlock(NamedTuple):
 
 def parse_srt(content: str) -> List[SubtitleBlock]:
     """Parses SRT content into a list of SubtitleBlock objects."""
+    content = content.replace('\r\n', '\n').strip()
     blocks = []
+    # A more robust regex to handle various line endings and optional trailing newlines
     for match in re.finditer(
-        r'(\d+)\s+([\d:,]+)\s+-->\s+([\d:,]+)\s+([\s\S]+?)(?=\n\n|\Z)',
+        r'(\d+)\n([\d:,]+)\s-->\s([\d:,]+)\n([\s\S]+?)(?=\n\n\d+|\Z)',
         content
     ):
         blocks.append(SubtitleBlock(
@@ -42,41 +57,69 @@ def build_srt(blocks: List[SubtitleBlock]) -> str:
     return "\n".join(srt_content)
 
 
-async def translate_file(source_path: Path, target_language: str, model: str) -> Path:
-    """
-    Reads an SRT file, translates its content, and saves it to a new file.
+def _translate_batch(texts: List[str], target_language: str, model: str, client: OpenAI) -> List[str]:
+    """Translates a batch of texts using the LLM."""
+    if not texts:
+        return []
+
+    concatenated_text = BATCH_SEPARATOR.join(texts)
     
-    This is a placeholder for the full implementation which will include:
-    1. Batching subtitles for efficient translation.
-    2. Calling the actual LLM API with a proper prompt.
-    3. Handling potential API errors and retries.
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT.format(target_language=target_language)},
+                {"role": "user", "content": concatenated_text},
+            ],
+            temperature=0.2, # Lower temperature for more deterministic translation
+        )
+        
+        translated_text = response.choices[0].message.content
+        if not translated_text:
+            raise ValueError("LLM returned an empty response.")
+            
+        translated_fragments = translated_text.split(BATCH_SEPARATOR)
+
+        if len(translated_fragments) != len(texts):
+             raise ValueError(
+                f"Translation fragment count mismatch. Expected {len(texts)}, got {len(translated_fragments)}."
+            )
+            
+        return [fragment.strip() for fragment in translated_fragments]
+
+    except Exception as e:
+        print(f"An error occurred during translation: {e}")
+        # In case of any error, return original texts as a fallback
+        return texts
+
+
+def translate_file(source_path: Path, target_language: str, model: str) -> Path:
+    """
+    Reads an SRT file, translates its content using an LLM, and saves it to a new file.
     """
     print(f"Starting translation for {source_path.name} to {target_language} using {model}")
-
-    # Read the source file
-    source_content = source_path.read_text(encoding='utf-8')
     
-    # Parse the SRT content
+    # Initialize OpenAI client
+    client = OpenAI(api_key=settings.OPENAI_API_KEY, base_url=settings.OPENAI_BASE_URL)
+
+    source_content = source_path.read_text(encoding='utf-8')
     subtitle_blocks = parse_srt(source_content)
     
     if not subtitle_blocks:
         raise ValueError("The SRT file is empty or has an invalid format.")
 
-    # --- Placeholder for LLM Translation Logic ---
-    # In a real implementation, we would batch texts and send them to the LLM.
-    # For now, we'll just prepend "[Translated]" to each line.
-    await asyncio.sleep(2) # Simulate network latency
+    original_texts = [block.text for block in subtitle_blocks]
     
-    translated_blocks = []
-    for block in subtitle_blocks:
-        translated_text = f"[Translated to {target_language}] {block.text}"
-        translated_blocks.append(block._replace(text=translated_text))
-    # --- End of Placeholder ---
+    # Simple batching for now, in a real scenario might need more complex logic
+    # based on token count.
+    translated_texts = _translate_batch(original_texts, target_language, model, client)
+    
+    translated_blocks = [
+        block._replace(text=translated_texts[i]) for i, block in enumerate(subtitle_blocks)
+    ]
 
-    # Build the new SRT content
     translated_srt_content = build_srt(translated_blocks)
     
-    # Save the result to a new file
     result_dir = Path(settings.RESULT_FILE_DIR)
     result_dir.mkdir(exist_ok=True)
     result_path = result_dir / f"translated_{source_path.stem}.srt"
