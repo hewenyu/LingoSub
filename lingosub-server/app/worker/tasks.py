@@ -11,11 +11,16 @@ def translate_srt_task(self, source_file_path: str, target_language: str, model:
     """
     try:
         source_path = Path(source_file_path)
-        
+
+        # Define a callback function that updates the Celery task's state
+        def update_progress(progress: float):
+            self.update_state(state='PROCESSING', meta={'progress': progress})
+
         result_path = translate_file(
             source_path=source_path, 
             target_language=target_language, 
-            model=model
+            model=model,
+            update_callback=update_progress
         )
         
         return {"result_path": str(result_path)}

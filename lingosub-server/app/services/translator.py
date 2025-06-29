@@ -1,6 +1,6 @@
 import re
 from pathlib import Path
-from typing import List, NamedTuple
+from typing import List, NamedTuple, Callable, Optional
 
 from openai import OpenAI
 from app.core.config import settings
@@ -8,6 +8,10 @@ from app.core.config import settings
 # --- Constants ---
 # A separator that is unlikely to appear in subtitle text
 BATCH_SEPARATOR = "|||---|||"
+# A rough estimate of tokens per character for batching
+TOKENS_PER_CHAR = 0.5
+# Max tokens for a single batch to avoid overwhelming the API
+MAX_TOKENS_PER_BATCH = 3000
 
 SYSTEM_PROMPT = """You are an expert subtitle translator. Your task is to translate the given text fragments from a source language into {target_language}.
 
@@ -93,13 +97,23 @@ def _translate_batch(texts: List[str], target_language: str, model: str, client:
         return texts
 
 
-def translate_file(source_path: Path, target_language: str, model: str) -> Path:
+def translate_file(
+    source_path: Path, 
+    target_language: str, 
+    model: str, 
+    update_callback: Optional[Callable[[float], None]] = None
+) -> Path:
     """
-    Reads an SRT file, translates its content using an LLM, and saves it to a new file.
+    Reads an SRT file, translates its content using an LLM, and saves it to a new file,
+    providing progress updates along the way.
     """
+    def _update_progress(progress: float):
+        if update_callback:
+            update_callback(progress)
+
+    _update_progress(0.0)
     print(f"Starting translation for {source_path.name} to {target_language} using {model}")
     
-    # Initialize OpenAI client
     client = OpenAI(api_key=settings.OPENAI_API_KEY, base_url=settings.OPENAI_BASE_URL)
 
     source_content = source_path.read_text(encoding='utf-8')
@@ -108,17 +122,46 @@ def translate_file(source_path: Path, target_language: str, model: str) -> Path:
     if not subtitle_blocks:
         raise ValueError("The SRT file is empty or has an invalid format.")
 
-    original_texts = [block.text for block in subtitle_blocks]
+    _update_progress(0.1) # Progress after parsing
+
+    all_texts = [block.text for block in subtitle_blocks]
+    translated_texts = []
     
-    # Simple batching for now, in a real scenario might need more complex logic
-    # based on token count.
-    translated_texts = _translate_batch(original_texts, target_language, model, client)
-    
+    # Simple batching logic based on token count
+    current_batch = []
+    current_token_count = 0
+    total_texts = len(all_texts)
+
+    for i, text in enumerate(all_texts):
+        text_token_count = len(text) * TOKENS_PER_CHAR
+        if current_token_count + text_token_count > MAX_TOKENS_PER_BATCH:
+            translated_batch = _translate_batch(current_batch, target_language, model, client)
+            translated_texts.extend(translated_batch)
+            current_batch = [text]
+            current_token_count = text_token_count
+        else:
+            current_batch.append(text)
+            current_token_count += text_token_count
+        
+        # Update progress after processing each text
+        progress = 0.1 + ( (i + 1) / total_texts * 0.8 ) # Translation is 80% of the work
+        _update_progress(progress)
+
+
+    # Translate the last remaining batch
+    if current_batch:
+        translated_batch = _translate_batch(current_batch, target_language, model, client)
+        translated_texts.extend(translated_batch)
+
+    if len(translated_texts) != total_texts:
+        raise ValueError("Mismatch in translated text count after batching.")
+
     translated_blocks = [
         block._replace(text=translated_texts[i]) for i, block in enumerate(subtitle_blocks)
     ]
 
     translated_srt_content = build_srt(translated_blocks)
+    _update_progress(0.95) # Progress after building SRT
     
     result_dir = Path(settings.RESULT_FILE_DIR)
     result_dir.mkdir(exist_ok=True)
@@ -127,5 +170,6 @@ def translate_file(source_path: Path, target_language: str, model: str) -> Path:
     result_path.write_text(translated_srt_content, encoding='utf-8')
     
     print(f"Translation finished. Result saved to {result_path}")
+    _update_progress(1.0) # Final progress
     
     return result_path 
