@@ -8,5 +8,5 @@ celery -A app.worker.celery_app worker --loglevel=info --concurrency=2
 
 
 # api 
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --port 8001
 ```
