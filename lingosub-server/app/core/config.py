@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     API_KEY: str
     CELERY_BROKER_URL: str = "redis://localhost:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/0"
+    TEMP_FILE_DIR: str = "temp_files"
+    RESULT_FILE_DIR: str = "result_files"
 
     # 如果 .env 文件存在，则从中加载
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding='utf-8')
