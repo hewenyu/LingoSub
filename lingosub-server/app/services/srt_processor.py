@@ -1,13 +1,14 @@
 import logging
 import pysrt
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
 class SRTProcessor:
     """
     Handles reading, parsing, processing, and writing SRT files.
+    Uses a list of dictionaries as the intermediate format.
     """
     SUBTITLE_SEPARATOR = "|||"
 
@@ -25,59 +26,63 @@ class SRTProcessor:
         logger.info(f"Parsing SRT file: {self.file_path}")
         try:
             self.subs = pysrt.open(str(self.file_path), encoding='utf-8')
-            self.original_texts = [sub.text for sub in self.subs]
+            # self.original_texts = [sub.text for sub in self.subs]
             logger.info(f"Successfully parsed {len(self.subs)} subtitle entries.")
         except Exception as e:
             logger.error(f"Failed to parse SRT file {self.file_path}: {e}", exc_info=True)
             raise
 
-    def batch_for_translation(self, batch_size: int = 100) -> List[str]:
+    def batch_for_translation(self, batch_size: int = 100) -> List[List[Dict[str, Any]]]:
         """
-        Creates batches of text for translation based on a specified batch size.
+        Creates batches of subtitle objects for translation.
         
         :param batch_size: The number of subtitle entries per batch.
-        :return: A list of string batches.
+        :return: A list of batches, where each batch is a list of subtitle dicts.
         """
         if not self.subs:
             self.parse()
         
-        if not self.original_texts:
-            logger.warning("No original texts found to batch.")
+        if not self.subs:
+            logger.warning("No subtitles found to batch.")
             return []
             
-        logger.info(f"Batching {len(self.original_texts)} texts into chunks of {batch_size}.")
+        logger.info(f"Batching {len(self.subs)} subtitles into chunks of {batch_size}.")
         
-        batches = []
-        for i in range(0, len(self.original_texts), batch_size):
-            batch_texts = self.original_texts[i:i + batch_size]
-            batches.append(self.SUBTITLE_SEPARATOR.join(batch_texts))
-            logger.debug(f"Created batch {len(batches)} with {len(batch_texts)} entries.")
-            
+        subtitle_dicts = [
+            {
+                "index": sub.index,
+                "start": str(sub.start),
+                "end": str(sub.end),
+                "text": sub.text
+            } for sub in self.subs
+        ]
+        
+        batches = [subtitle_dicts[i:i + batch_size] for i in range(0, len(subtitle_dicts), batch_size)]
         logger.info(f"Successfully created {len(batches)} batches.")
         return batches
 
-    def reconstruct(self, translated_batches: List[str]):
+    def reconstruct(self, translated_dicts: List[Dict[str, Any]]):
         """
-        Reconstructs the subtitles with the translated text.
+        Reconstructs the subtitles with the translated text from a list of dicts.
         """
         if not self.subs:
             raise ValueError("Subtitles have not been parsed yet. Call parse() first.")
         
-        logger.info("Reconstructing subtitles from translated batches.")
-        
-        all_translated_texts = []
-        for i, batch in enumerate(translated_batches):
-            texts = batch.split(self.SUBTITLE_SEPARATOR)
-            logger.debug(f"Processing translated batch {i+1} with {len(texts)} entries.")
-            all_translated_texts.extend(texts)
+        logger.info(f"Reconstructing subtitles from {len(translated_dicts)} translated dicts.")
 
-        if len(all_translated_texts) != len(self.subs):
-            error_msg = f"Mismatch between original ({len(self.subs)}) and translated ({len(all_translated_texts)}) subtitle counts."
+        if len(translated_dicts) != len(self.subs):
+            error_msg = f"Mismatch between original ({len(self.subs)}) and translated ({len(translated_dicts)}) subtitle counts."
             logger.error(error_msg)
             raise ValueError(error_msg)
 
+        # Assuming the translated_dicts are in the correct order.
+        # A more robust implementation could use the index for matching.
         for i, sub in enumerate(self.subs):
-            sub.text = all_translated_texts[i].strip()
+            translated_data = translated_dicts[i]
+            # Safety check for index if needed
+            if translated_data.get('index') != sub.index:
+                 logger.warning(f"Index mismatch during reconstruction. Expected {sub.index}, got {translated_data.get('index')}. Relying on list order.")
+            sub.text = translated_data['text'].strip()
         
         logger.info("Successfully reconstructed subtitles.")
 
