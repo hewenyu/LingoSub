@@ -1,20 +1,26 @@
 import logging
-from typing import Optional
+from typing import Optional, List
 from openai import OpenAI, APIError, RateLimitError
 import time
 import random
 
+from app.services.rate_limiter import RateLimiter
+
 logger = logging.getLogger(__name__)
+
+# Define a threshold for switching to single-line translation
+MIN_BATCH_SIZE_FOR_RECURSION = 10
 
 class TranslationService:
     """
     A service to handle interactions with the OpenAI API for translation.
     """
-    def __init__(self, api_key: str, model: str, base_url: Optional[str] = None):
+    def __init__(self, api_key: str, model: str, rate_limiter: RateLimiter, base_url: Optional[str] = None):
         if not api_key:
             raise ValueError("API key is required.")
-        self.client = OpenAI(api_key=api_key, base_url=base_url)
+        self.client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0) # Disable internal retries
         self.model = model
+        self.rate_limiter = rate_limiter
 
     def _create_prompt(self, text_batch: str, target_language: str) -> str:
         """
@@ -38,6 +44,7 @@ class TranslationService:
         Translates a single line of text. Used as a fallback.
         """
         logger.debug(f"Translating single line to {target_language}: '{text[:30]}...'")
+        self.rate_limiter.acquire()
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[
@@ -48,19 +55,23 @@ class TranslationService:
         )
         return response.choices[0].message.content.strip()
 
-    def translate_batch(self, text_batch: str, target_language: str, max_retries: int = 3) -> str:
+    def translate_batch(self, text_batch: str, target_language: str, max_retries: int = 2) -> str:
         """
-        Translates a batch of text using the OpenAI API with retry logic.
-        If batch translation fails format validation, it falls back to single-line translation.
+        Translates a batch of text using a recursive, hierarchical fallback strategy.
         """
         original_texts = text_batch.split('|||')
         expected_count = len(original_texts)
+
+        # If the batch is too small, just translate line-by-line directly.
+        if expected_count < MIN_BATCH_SIZE_FOR_RECURSION:
+            return self._fallback_to_single_lines(original_texts, target_language)
 
         system_prompt, user_prompt = self._create_prompt(text_batch, target_language)
         attempt = 0
         while attempt < max_retries:
             try:
-                logger.info(f"Translating batch for {target_language}. Attempt {attempt + 1}/{max_retries}")
+                self.rate_limiter.acquire()
+                logger.info(f"Attempting to translate a batch of {expected_count} subtitles. Attempt {attempt + 1}/{max_retries}")
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[
@@ -71,64 +82,52 @@ class TranslationService:
                 )
                 
                 if not response.choices or not response.choices[0].message.content:
-                    logger.warning(f"API returned an empty response for batch. Attempt {attempt + 1}/{max_retries}")
                     raise ValueError("Received empty or invalid content from API.")
                 
                 translated_text = response.choices[0].message.content.strip()
-                
-                # --- Validation Step ---
                 translated_parts = translated_text.split('|||')
+                
                 if len(translated_parts) == expected_count:
-                    logger.info(f"Successfully translated batch for {target_language} with correct format.")
+                    logger.info(f"Successfully translated batch of {expected_count} with correct format.")
                     return translated_text
                 else:
                     logger.warning(
-                        f"Format mismatch in batch translation. "
-                        f"Expected {expected_count} parts, got {len(translated_parts)}. "
-                        f"Attempt {attempt + 1}/{max_retries}. Retrying..."
+                        f"Format mismatch in batch of {expected_count}. "
+                        f"Expected {expected_count}, got {len(translated_parts)}. Retrying..."
                     )
-                    # This will be retried by the loop
-                    if attempt + 1 >= max_retries:
-                        break # Break to fall back to single-line translation
                     attempt += 1
-                    time.sleep(2) # Wait before retrying on format mismatch
                     continue
-                # --- End Validation ---
 
-            except RateLimitError as e:
-                wait_time = (2 ** attempt) + (2 * random.random()) # Exponential backoff with jitter
-                logger.warning(f"Rate limit hit on attempt {attempt+1}. Retrying in {wait_time:.2f}s... Error: {e}")
-                time.sleep(wait_time)
+            except (APIError, RateLimitError) as e:
+                logger.error(f"API error on batch of {expected_count}: {e}", exc_info=True)
                 attempt += 1
-            except APIError as e:
-                logger.error(f"API error on attempt {attempt+1} during translation: {e}", exc_info=True)
-                # For specific status codes, we might not want to retry
-                if e.status_code in [400, 404, 401]:
-                     raise e
-                attempt +=1
-                time.sleep(2 ** attempt)
             except Exception as e:
-                logger.error(f"An unexpected error occurred on attempt {attempt+1} during translation: {e}", exc_info=True)
+                logger.error(f"Unexpected error on batch of {expected_count}: {e}", exc_info=True)
                 attempt += 1
-                if attempt >= max_retries:
-                    raise
-                time.sleep(2) # Brief wait before retrying on general errors
-
-        # --- Fallback Mechanism ---
-        logger.warning(f"Batch translation failed format validation after {max_retries} attempts. "
-                       f"Falling back to single-line translation for a batch of {expected_count} subtitles.")
         
+        # --- Hierarchical Fallback ---
+        logger.warning(f"Batch of {expected_count} failed after {max_retries} attempts. Splitting and retrying.")
+        mid_point = expected_count // 2
+        
+        first_half_batch = "|||".join(original_texts[:mid_point])
+        second_half_batch = "|||".join(original_texts[mid_point:])
+
+        first_half_translated = self.translate_batch(first_half_batch, target_language)
+        second_half_translated = self.translate_batch(second_half_batch, target_language)
+        
+        return f"{first_half_translated}|||{second_half_translated}"
+
+    def _fallback_to_single_lines(self, original_texts: List[str], target_language: str) -> str:
+        """
+        The final fallback mechanism: translates text line by line.
+        """
+        logger.warning(f"Falling back to single-line translation for a batch of {len(original_texts)} subtitles.")
         translated_parts = []
-        for i, text in enumerate(original_texts):
+        for text in original_texts:
             try:
-                # Adding a small delay to avoid hitting rate limits in the fallback
-                if i > 0:
-                    time.sleep(0.1)
                 translated_parts.append(self._translate_single_text(text, target_language))
             except Exception as e:
                 logger.error(f"Failed to translate single line '{text[:30]}...' during fallback: {e}", exc_info=True)
-                # If a single line fails, we add a placeholder to maintain structure.
                 translated_parts.append(f"[Translation Error: {text}]")
         
-        logger.info("Successfully completed fallback translation.")
         return "|||".join(translated_parts) 

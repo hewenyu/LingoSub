@@ -2,12 +2,24 @@ import logging
 from pathlib import Path
 import uuid
 from celery import Task
+import redis
+
 from app.worker.celery_app import celery_app
 from app.core.config import settings
 from app.services.srt_processor import SRTProcessor
 from app.services.translation_service import TranslationService
+from app.services.rate_limiter import RateLimiter
 
 logger = logging.getLogger(__name__)
+
+# Initialize a global Redis client for the worker
+# This helps in reusing the connection across tasks if the worker process is the same.
+try:
+    redis_client = redis.from_url(settings.CELERY_BROKER_URL)
+    logger.info("Successfully connected to Redis for Rate Limiter.")
+except Exception as e:
+    logger.error(f"Failed to connect to Redis for Rate Limiter: {e}", exc_info=True)
+    redis_client = None
 
 @celery_app.task(bind=True)
 def translate_srt_task(self: Task, source_file_path: str, target_language: str, model: str):
@@ -17,15 +29,25 @@ def translate_srt_task(self: Task, source_file_path: str, target_language: str, 
     """
     logger.info(f"Task {self.request.id} started: file={source_file_path}, lang={target_language}, model={model}")
     
+    if not redis_client:
+        raise ConnectionError("Redis client is not available. Cannot proceed with rate limiting.")
+
     try:
         self.update_state(state='PROCESSING', meta={'progress': 0.05, 'message': 'Initializing...'})
         
-        # 1. Initialize Services
+        # 1. Initialize Services with Rate Limiter
+        rate_limiter = RateLimiter(
+            redis_client=redis_client,
+            key="openai_api_limit",
+            limit=1,  # 1 request
+            period=1  # per 1 second
+        )
         processor = SRTProcessor(file_path=source_file_path)
         translator = TranslationService(
             api_key=settings.OPENAI_API_KEY,
             base_url=settings.OPENAI_BASE_URL,
-            model=model
+            model=model,
+            rate_limiter=rate_limiter
         )
 
         # 2. Parse and Batch
