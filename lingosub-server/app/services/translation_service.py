@@ -1,6 +1,7 @@
 import logging
 from typing import Optional, List, Dict, Any
 import json
+import re
 from openai import OpenAI, APIError, RateLimitError
 import time
 import random
@@ -10,7 +11,7 @@ from app.services.rate_limiter import RateLimiter
 logger = logging.getLogger(__name__)
 
 # Define a threshold for switching to single-line translation
-MIN_BATCH_SIZE_FOR_RECURSION = 10
+MIN_BATCH_SIZE_FOR_RECURSION = 5
 
 class TranslationService:
     """
@@ -23,43 +24,34 @@ class TranslationService:
         self.model = model
         self.rate_limiter = rate_limiter
 
-    def _create_prompt(self, json_batch_str: str, target_language: str) -> str:
-        """
-        Creates a specialized prompt for batch translation using JSON format.
-        """
-        system_prompt = f"""You are a professional subtitle translator. Your task is to translate the `text` field of each JSON object in the following array into {target_language}.
-You MUST respond with a valid JSON array with the exact same structure and number of objects as the input.
-Do NOT alter the `index`, `start`, or `end` fields. Only modify the `text` field with its translation.
+    def _create_numbered_list_prompt(self, numbered_list: str, target_language: str) -> tuple[str, str]:
+        system_prompt = f"""You are a professional translator. Your task is to translate the text for each numbered line into {target_language}.
+You MUST respond with a numbered list that has the exact same number of lines as the input.
+Do NOT add any extra text, explanations, or introductory phrases. Only provide the translated numbered list.
 
 Example Input:
-[
-  {{
-    "index": 1,
-    "start": "00:00:01,000",
-    "end": "00:00:03,000",
-    "text": "Hello, everyone!"
-  }}
-]
+1. Hello, everyone!
+2. Welcome to our channel.
 
 Example Output for 'Spanish':
-[
-  {{
-    "index": 1,
-    "start": "00:00:01,000",
-    "end": "00:00:03,000",
-    "text": "¡Hola a todos!"
-  }}
-]
+1. ¡Hola a todos!
+2. Bienvenidos a nuestro canal.
 """
-        user_prompt = f"Translate the `text` in the following JSON array to {target_language}:\n\n{json_batch_str}"
+        user_prompt = f"Translate the text for each line in the following numbered list to {target_language}:\n\n{numbered_list}"
         return system_prompt, user_prompt
+
+    def _parse_numbered_list(self, text: str) -> List[str]:
+        # Split by lines, then strip numbering like "1. ", "12. ", etc.
+        lines = text.strip().split('\n')
+        # This regex handles numbers, dots, and optional spaces.
+        return [re.sub(r'^\d+\.\s*', '', line).strip() for line in lines]
 
     def _translate_single_text(self, text: str, target_language: str) -> str:
         """
         Translates a single line of text. Used as a fallback.
         """
-        logger.debug(f"Translating single line to {target_language}: '{text[:30]}...'")
         self.rate_limiter.acquire()
+        logger.debug(f"Translating single line to {target_language}: '{text[:30]}...'")
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[
@@ -81,44 +73,43 @@ Example Output for 'Spanish':
         if expected_count < MIN_BATCH_SIZE_FOR_RECURSION:
             return self._fallback_to_single_items(batch, target_language)
 
-        json_batch_str = json.dumps(batch, indent=2)
-        system_prompt, user_prompt = self._create_prompt(json_batch_str, target_language)
+        # Format the batch into a numbered list string
+        numbered_list = "\n".join([f"{i+1}. {item['text']}" for i, item in enumerate(batch)])
+        system_prompt, user_prompt = self._create_numbered_list_prompt(numbered_list, target_language)
         
         attempt = 0
         while attempt < max_retries:
             try:
                 self.rate_limiter.acquire()
-                logger.info(f"Attempting to translate a batch of {expected_count} subtitles. Attempt {attempt + 1}/{max_retries}")
+                logger.info(f"Attempting to translate a batch of {expected_count} subtitles (numbered list format). Attempt {attempt + 1}/{max_retries}")
                 response = self.client.chat.completions.create(
                     model=self.model,
-                    response_format={"type": "json_object"},
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ]
                 )
                 
-                translated_text = response.choices[0].message.content
-                translated_data = json.loads(translated_text)
+                translated_text = response.choices[0].message.content.strip()
+                translated_lines = self._parse_numbered_list(translated_text)
                 
-                # The response might be a dict with a key containing the list
-                if isinstance(translated_data, dict):
-                     # A common pattern is for the model to wrap the list in a key
-                     if len(translated_data.keys()) == 1:
-                         key = list(translated_data.keys())[0]
-                         if isinstance(translated_data[key], list):
-                             translated_data = translated_data[key]
-
-                if isinstance(translated_data, list) and len(translated_data) == expected_count:
+                if len(translated_lines) == expected_count:
                     logger.info(f"Successfully translated batch of {expected_count} with correct format.")
-                    return translated_data
+                    # Reconstruct the batch of dicts
+                    reconstructed_batch = []
+                    for i, item in enumerate(batch):
+                        new_item = item.copy()
+                        new_item['text'] = translated_lines[i]
+                        reconstructed_batch.append(new_item)
+                    return reconstructed_batch
                 else:
-                    logger.warning(f"Format/count mismatch in batch of {expected_count}. Retrying...")
+                    logger.warning(
+                        f"Format/count mismatch in batch of {expected_count}. "
+                        f"Expected {expected_count} lines, got {len(translated_lines)}. Retrying..."
+                    )
+                    logger.info(f"LLM raw response causing mismatch:\n---\n{translated_text}\n---")
                     attempt += 1
 
-            except json.JSONDecodeError:
-                logger.error(f"Failed to decode JSON from API response on attempt {attempt + 1}", exc_info=True)
-                attempt += 1
             except Exception as e:
                 logger.error(f"Unexpected error on batch of {expected_count}: {e}", exc_info=True)
                 attempt += 1
