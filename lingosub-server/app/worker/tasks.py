@@ -40,7 +40,7 @@ def translate_srt_task(self: Task, source_file_path: str, target_language: str, 
             redis_client=redis_client,
             key="openai_api_limit",
             limit=1,  # 1 request
-            period=1  # per 1 second
+            period=2  # per 2 seconds
         )
         processor = SRTProcessor(file_path=source_file_path)
         translator = TranslationService(
