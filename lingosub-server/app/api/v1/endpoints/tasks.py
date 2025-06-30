@@ -23,7 +23,7 @@ router = APIRouter()
 async def create_translation_task(
     file: UploadFile = File(...),
     target_language: str = Form(...),
-    model: str = Form("gpt-4o-mini"),
+    model: str = Form("gpt-4.1-mini"),
     api_key: str = Depends(get_api_key)
 ):
     """
