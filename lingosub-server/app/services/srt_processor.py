@@ -2,6 +2,7 @@ import logging
 import pysrt
 from pathlib import Path
 from typing import List, Dict, Any
+from itertools import groupby
 
 logger = logging.getLogger(__name__)
 
@@ -46,45 +47,51 @@ class SRTProcessor:
             logger.warning("No subtitles found to batch.")
             return []
             
-        logger.info(f"Batching {len(self.subs)} subtitles into chunks of {batch_size}.")
+        logger.info(f"Splitting multi-line subtitles and batching {len(self.subs)} entries into chunks of {batch_size}.")
         
-        subtitle_dicts = [
-            {
-                "index": sub.index,
-                "start": str(sub.start),
-                "end": str(sub.end),
-                "text": sub.text
-            } for sub in self.subs
-        ]
-        
-        batches = [subtitle_dicts[i:i + batch_size] for i in range(0, len(subtitle_dicts), batch_size)]
-        logger.info(f"Successfully created {len(batches)} batches.")
+        # Step 1: Create a flat list of "translation units"
+        translation_units = []
+        for sub in self.subs:
+            lines = sub.text.split('\n')
+            for i, line in enumerate(lines):
+                translation_units.append({
+                    "original_index": sub.index,
+                    "sub_index": i,
+                    "text": line
+                })
+
+        # Step 2: Create batches from the flat list
+        batches = [translation_units[i:i + batch_size] for i in range(0, len(translation_units), batch_size)]
+        logger.info(f"Successfully created {len(batches)} batches from {len(translation_units)} translation units.")
         return batches
 
-    def reconstruct(self, translated_dicts: List[Dict[str, Any]]):
+    def reconstruct(self, translated_units: List[Dict[str, Any]]):
         """
-        Reconstructs the subtitles with the translated text from a list of dicts.
+        Reconstructs the subtitles by grouping and joining translated units.
         """
         if not self.subs:
             raise ValueError("Subtitles have not been parsed yet. Call parse() first.")
         
-        logger.info(f"Reconstructing subtitles from {len(translated_dicts)} translated dicts.")
+        logger.info(f"Reconstructing subtitles from {len(translated_units)} translated units.")
 
-        if len(translated_dicts) != len(self.subs):
-            error_msg = f"Mismatch between original ({len(self.subs)}) and translated ({len(translated_dicts)}) subtitle counts."
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+        # Create a dictionary for quick lookup of subtitles by index
+        subs_dict = {sub.index: sub for sub in self.subs}
 
-        # Assuming the translated_dicts are in the correct order.
-        # A more robust implementation could use the index for matching.
-        for i, sub in enumerate(self.subs):
-            translated_data = translated_dicts[i]
-            # Safety check for index if needed
-            if translated_data.get('index') != sub.index:
-                 logger.warning(f"Index mismatch during reconstruction. Expected {sub.index}, got {translated_data.get('index')}. Relying on list order.")
-            sub.text = translated_data['text'].strip()
-        
-        logger.info("Successfully reconstructed subtitles.")
+        # Sort units by original_index and then sub_index to ensure correct order
+        translated_units.sort(key=lambda x: (x['original_index'], x['sub_index']))
+
+        # Group translated units by their original subtitle index
+        for original_index, group in groupby(translated_units, key=lambda x: x['original_index']):
+            if original_index in subs_dict:
+                # Rejoin the lines for this subtitle
+                sorted_lines = [unit['text'] for unit in sorted(list(group), key=lambda x: x['sub_index'])]
+                subs_dict[original_index].text = '\n'.join(sorted_lines)
+            else:
+                logger.warning(f"Found translated units for an unknown original_index: {original_index}")
+
+        # Final check to ensure all original subtitles were processed
+        if len(subs_dict) > 0:
+             logger.info(f"Successfully reconstructed {len(subs_dict)} subtitles.")
 
     def write(self, output_path: str):
         """

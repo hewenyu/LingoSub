@@ -46,12 +46,24 @@ Example Output for 'Spanish':
         # This regex handles numbers, dots, and optional spaces.
         return [re.sub(r'^\d+\.\s*', '', line).strip() for line in lines]
 
+    def _get_numbered_text_map(self, text: str) -> Dict[int, str]:
+        """Parses a numbered list string into a dictionary."""
+        result_map = {}
+        lines = text.strip().split('\n')
+        for line in lines:
+            match = re.match(r'^(\d+)\.\s*(.*)', line.strip())
+            if match:
+                index = int(match.group(1))
+                content = match.group(2).strip()
+                result_map[index] = content
+        return result_map
+
     def _translate_single_text(self, text: str, target_language: str) -> str:
         """
         Translates a single line of text. Used as a fallback.
         """
         self.rate_limiter.acquire()
-        logger.debug(f"Translating single line to {target_language}: '{text[:30]}...'")
+        logger.info(f"Translating single line to {target_language}: '{text[:30]}...'")
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[
@@ -81,7 +93,7 @@ Example Output for 'Spanish':
         while attempt < max_retries:
             try:
                 self.rate_limiter.acquire()
-                logger.info(f"Attempting to translate a batch of {expected_count} subtitles (numbered list format). Attempt {attempt + 1}/{max_retries}")
+                logger.info(f"Attempting to translate a batch of {expected_count} translation units. Attempt {attempt + 1}/{max_retries}")
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[
@@ -91,30 +103,54 @@ Example Output for 'Spanish':
                 )
                 
                 translated_text = response.choices[0].message.content.strip()
-                translated_lines = self._parse_numbered_list(translated_text)
                 
-                if len(translated_lines) == expected_count:
+                # --- Surgical Retry Logic ---
+                # This logic is more robust than just comparing counts.
+                translated_map = self._get_numbered_text_map(translated_text)
+                
+                if len(translated_map) == expected_count:
                     logger.info(f"Successfully translated batch of {expected_count} with correct format.")
-                    # Reconstruct the batch of dicts
                     reconstructed_batch = []
                     for i, item in enumerate(batch):
                         new_item = item.copy()
-                        new_item['text'] = translated_lines[i]
+                        # Use the map to ensure we get the right text even if order is scrambled
+                        new_item['text'] = translated_map.get(i + 1, "[Translation Missing]")
                         reconstructed_batch.append(new_item)
                     return reconstructed_batch
-                else:
-                    logger.warning(
-                        f"Format/count mismatch in batch of {expected_count}. "
-                        f"Expected {expected_count} lines, got {len(translated_lines)}. Retrying..."
-                    )
-                    logger.info(f"LLM raw response causing mismatch:\n---\n{translated_text}\n---")
-                    attempt += 1
+                
+                # If count mismatches, try to repair it.
+                logger.warning(
+                    f"Count mismatch in batch of {expected_count}. "
+                    f"Expected {expected_count}, got {len(translated_map)}. Attempting surgical retry."
+                )
+                
+                repaired_batch = []
+                for i, item in enumerate(batch):
+                    new_item = item.copy()
+                    original_text_number = i + 1
+
+                    if original_text_number in translated_map:
+                        new_item['text'] = translated_map[original_text_number]
+                    else:
+                        logger.warning(f"Item {original_text_number} was missing from LLM response. Translating it individually.")
+                        try:
+                            new_item['text'] = self._translate_single_text(item['text'], target_language)
+                        except Exception as e:
+                            logger.error(f"Surgical retry for item {original_text_number} failed: {e}")
+                            new_item['text'] = f"[Translation Error: {item['text']}]"
+                    
+                    repaired_batch.append(new_item)
+                
+                logger.info(f"Successfully repaired batch of {expected_count} via surgical retry.")
+                return repaired_batch
+                # --- End Surgical Retry ---
 
             except Exception as e:
-                logger.error(f"Unexpected error on batch of {expected_count}: {e}", exc_info=True)
-                attempt += 1
+                logger.error(f"Unexpected error on batch of {expected_count}, will trigger fallback: {e}", exc_info=True)
+                attempt += 1 # Incrementing here means we won't retry on parsing/validation errors, but go to fallback.
         
-        logger.warning(f"Batch of {expected_count} failed after {max_retries} attempts. Splitting and retrying.")
+        # This fallback is now a secondary safety net.
+        logger.warning(f"Batch of {expected_count} failed even surgical retry. Falling back to splitting.")
         mid_point = expected_count // 2
         
         first_half_translated = self.translate_batch(batch[:mid_point], target_language)
@@ -123,7 +159,7 @@ Example Output for 'Spanish':
         return first_half_translated + second_half_translated
 
     def _fallback_to_single_items(self, batch: List[Dict[str, Any]], target_language: str) -> List[Dict[str, Any]]:
-        logger.warning(f"Falling back to single-item translation for a batch of {len(batch)} subtitles.")
+        logger.warning(f"Falling back to single-item translation for a batch of {len(batch)} translation units.")
         translated_items = []
         for item in batch:
             try:
