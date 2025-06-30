@@ -7,8 +7,9 @@ services:
   server:
     image: hewenyulucky/lingosub:latest
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
-    ports:
-      - "8000:8000"
+    volumes:
+      - ./temp_files:/app/temp_files
+      - ./result_files:/app/result_files
     env_file:
       - .env
     depends_on:
@@ -17,10 +18,22 @@ services:
   worker:
     image: hewenyulucky/lingosub:latest
     command: celery -A app.worker.celery_app worker --loglevel=info --concurrency=2
+    volumes:
+      - ./temp_files:/app/temp_files
+      - ./result_files:/app/result_files
     env_file:
       - .env
     depends_on:
       - redis
+
+  nginx:
+    image: nginx:latest
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+      - ./certs:/etc/nginx/certs
 
 volumes:
   redis_data: 
