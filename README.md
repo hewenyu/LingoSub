@@ -15,13 +15,9 @@ uvicorn app.main:app --reload --port 8001
 
 
 
-# post
-curl -X POST "http://127.0.0.1:8001/api/v1/tasks" ^
-  -H "Authorization: Bearer test" ^
-  -F "file=@Black.Angel.2002.iNT.DVDRip.xVID-xHONG.chs.srt" ^
-  -F "target_language=en"
+# linux
+curl -X POST "http://127.0.0.1:8001/api/v1/tasks" -H "Authorization: Bearer test" -F "file=@kung.fu.dunk.2008.dvdrip.xvid-bien.srt" -F "target_language=en"
 
 # windows
-curl.exe -X POST "http://127.0.0.1:8001/api/v1/tasks" -H "Authorization: Bearer test" -F "file=@Black.Angel.2002.iNT.DVDRip.xVID-xHONG.chs.srt" -F "target_language=en"
-
+curl.exe -X POST "http://127.0.0.1:8001/api/v1/tasks" -H "Authorization: Bearer test" -F "file=@kung.fu.dunk.2008.dvdrip.xvid-bien.srt" -F "target_language=en"
 ```
