@@ -64,7 +64,7 @@ def translate_srt_task(self: Task, source_file_path: str, target_language: str, 
 
         # 3. Translate
         self.update_state(state='PROCESSING', meta={'progress': 0.3, 'message': 'Translating...'})
-        translated_batches = []
+        all_translated_units = []
         num_batches = len(batches)
         start_progress = 0.3
         end_progress = 0.8
@@ -77,11 +77,11 @@ def translate_srt_task(self: Task, source_file_path: str, target_language: str, 
             )
             logger.debug(f"Task {self.request.id}: Translating batch {i+1}/{num_batches}")
             translated_batch = translator.translate_batch(batch, target_language)
-            translated_batches.append(translated_batch)
+            all_translated_units.extend(translated_batch)
 
         # 4. Reconstruct
         self.update_state(state='PROCESSING', meta={'progress': 0.8, 'message': 'Reconstructing file...'})
-        processor.reconstruct(translated_batches)
+        processor.reconstruct(all_translated_units)
 
         # 5. Save Result
         self.update_state(state='PROCESSING', meta={'progress': 0.9, 'message': 'Saving result...'})
