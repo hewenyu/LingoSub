@@ -5,3 +5,4 @@ redis
 pydantic-settings
 python-multipart
 openai 
+pysrt 
