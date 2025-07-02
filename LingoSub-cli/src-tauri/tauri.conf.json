@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "lingosub-cli",
+  "productName": "LingoSub",
   "version": "0.1.0",
-  "identifier": "com.lingosub-cli.app",
+  "identifier": "com.lingosub.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,9 +12,13 @@
   "app": {
     "windows": [
       {
-        "title": "lingosub-cli",
-        "width": 800,
-        "height": 600
+        "title": "LingoSub - Netflix级字幕生成工具",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600,
+        "center": true,
+        "resizable": true
       }
     ],
     "security": {
@@ -31,5 +35,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
-  }
+  },
+  "plugins": {}
 }
