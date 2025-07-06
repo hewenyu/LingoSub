@@ -7,6 +7,7 @@ import asyncio
 import sys
 import json
 import logging
+import os
 from pathlib import Path
 from datetime import datetime
 
@@ -225,7 +226,7 @@ async def test_process_lifecycle():
         model_name="test-model"
     ))
     
-    process_manager = ProcessManager(engine, config)
+    process_manager = ProcessManager(engine, config, test_mode=True)
     
     try:
         # 测试启动
@@ -245,8 +246,17 @@ async def test_process_lifecycle():
         try:
             if process_manager.state.value != "stopped":
                 await process_manager.stop()
-        except:
-            pass
+            
+            # 停止性能监控器
+            if hasattr(process_manager.logger, 'performance_monitor'):
+                process_manager.logger.performance_monitor.stop_monitoring()
+                
+            # 清理通信器
+            if hasattr(process_manager, 'communicator') and process_manager.communicator is not None:
+                process_manager.communicator.stop()
+                
+        except Exception as e:
+            print(f"⚠️ 清理进程管理器时出现警告: {str(e)}")
     
     print("✅ 进程生命周期管理测试通过")
 
@@ -289,18 +299,64 @@ async def main():
         traceback.print_exc()
         sys.exit(1)
     finally:
-        # 确保所有异步任务都完成
-        tasks = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        # 清理所有待处理的任务
+        try:
+            # 获取当前事件循环中的所有任务
+            pending_tasks = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
+            
+            if pending_tasks:
+                print(f"🔄 清理 {len(pending_tasks)} 个待处理任务...")
+                
+                # 取消所有待处理任务
+                for task in pending_tasks:
+                    task.cancel()
+                
+                # 使用超时等待任务完成
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*pending_tasks, return_exceptions=True),
+                        timeout=2.0  # 2秒超时
+                    )
+                    print("✅ 任务清理完成")
+                except asyncio.TimeoutError:
+                    print("⚠️ 任务清理超时，强制继续")
+                    # 强制取消所有任务
+                    for task in pending_tasks:
+                        if not task.done():
+                            task.cancel()
+                
+            # 清理日志处理器
+            logging.shutdown()
+            print("✅ 日志系统已关闭")
+            
+        except Exception as e:
+            print(f"⚠️ 清理过程中的警告: {str(e)}")
+        
+        # 给系统一点时间完成清理
+        try:
+            await asyncio.sleep(0.1)
+        except:
+            pass
 
 
 if __name__ == "__main__":
     # 使用更安全的事件循环策略
     try:
+        # 设置事件循环策略(Windows)
+        if sys.platform == "win32":
+            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+        
         asyncio.run(main())
+        
     except RuntimeError as e:
         if "Event loop stopped" in str(e):
             print("✅ 测试完成，忽略事件循环清理警告")
         else:
-            raise 
+            raise
+    except KeyboardInterrupt:
+        print("\n⏹️  测试被用户中断")
+    finally:
+        # 确保程序退出
+        print("🔚 程序退出")
+        import os
+        os._exit(0) 

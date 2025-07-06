@@ -33,9 +33,10 @@ class ProcessState(str, Enum):
 class ProcessManager:
     """进程管理器"""
     
-    def __init__(self, engine: BaseSidecarEngine, config: SidecarConfig):
+    def __init__(self, engine: BaseSidecarEngine, config: SidecarConfig, test_mode: bool = False):
         self.engine = engine
         self.config = config
+        self.test_mode = test_mode  # 添加测试模式标志
         self.state = ProcessState.INITIALIZING
         self.start_time = None
         self.stop_time = None
@@ -46,8 +47,11 @@ class ProcessManager:
         # 设置日志
         self.logger = setup_logging(config.logging, engine.engine_id)
         
-        # 通信器
-        self.communicator = SidecarCommunicator(self._handle_command)
+        # 通信器（测试模式下不创建）
+        if not test_mode:
+            self.communicator = SidecarCommunicator(self._handle_command)
+        else:
+            self.communicator = None
         
         # 信号处理
         self._setup_signal_handlers()
@@ -91,8 +95,9 @@ class ProcessManager:
             # 启动引擎
             await self.engine.start()
             
-            # 启动通信器
-            asyncio.create_task(self.communicator.start())
+            # 启动通信器（如果存在）
+            if self.communicator:
+                asyncio.create_task(self.communicator.start())
             
             # 启动健康检查
             await self._start_health_check()
@@ -136,7 +141,8 @@ class ProcessManager:
             self.logger.performance_monitor.stop_monitoring()
             
             # 停止通信器
-            self.communicator.stop()
+            if self.communicator:
+                self.communicator.stop()
             
             # 停止引擎
             await self.engine.stop()
