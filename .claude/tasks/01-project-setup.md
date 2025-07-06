@@ -154,8 +154,8 @@ LingoSub/
 ### 1.4 基础配置和依赖管理
 
 **任务ID**: SETUP-004  
-**状态**: 待开始  
-**前置依赖**: SETUP-003  
+**状态**: 已完成 ✅  
+**前置依赖**: SETUP-003 ✅
 
 **目的**: 配置项目的基础依赖和开发工具
 
@@ -168,12 +168,12 @@ LingoSub/
 - 开发工具配置文件
 
 **实现要点**:
-1. 配置 `package.json` 前端依赖
-2. 配置 `Cargo.toml` Rust 依赖
-3. 配置 `requirements.txt` Python 依赖
-4. 设置 ESLint 和 Prettier 配置
-5. 设置 TypeScript 配置
-6. 配置 Git hooks 和 CI/CD 基础
+1. 配置 `package.json` 前端依赖 ✅
+2. 配置 `Cargo.toml` Rust 依赖 ✅
+3. 配置 `requirements.txt` Python 依赖 ✅
+4. 设置 ESLint 和 Prettier 配置 ✅
+5. 设置 TypeScript 配置 ✅
+6. 配置 Git hooks 和 CI/CD 基础 ✅
 
 **关键依赖列表**:
 
@@ -199,10 +199,11 @@ LingoSub/
 - logging
 
 **验收标准**:
-- 所有依赖安装成功
-- 代码格式化工具正常工作
-- TypeScript 编译无错误
-- 基础的 lint 检查通过
+- ✅ 所有依赖安装成功
+- ✅ 代码格式化工具正常工作
+- ✅ TypeScript 编译无错误
+- ✅ 基础的 lint 检查通过
+- ✅ Tauri 开发环境可用
 
 **注意事项**:
 - 锁定依赖版本避免兼容性问题
@@ -213,7 +214,7 @@ LingoSub/
 
 **任务ID**: SETUP-005  
 **状态**: 待开始  
-**前置依赖**: SETUP-004  
+**前置依赖**: SETUP-004 ✅
 
 **目的**: 定义项目核心的数据类型和接口规范
 
