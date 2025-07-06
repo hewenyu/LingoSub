@@ -11,7 +11,7 @@
     "plugin:react-hooks/recommended",
     "plugin:react/jsx-runtime"
   ],
-  "ignorePatterns": ["dist", ".eslintrc.json", "src-tauri"],
+  "ignorePatterns": ["dist", ".eslintrc.json", "src-tauri", "src/types"],
   "parserOptions": {
     "ecmaVersion": "latest",
     "sourceType": "module",
